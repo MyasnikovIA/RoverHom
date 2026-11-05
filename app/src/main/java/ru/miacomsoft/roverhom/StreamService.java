@@ -27,7 +27,7 @@ import java.util.Map;
 
 public class StreamService extends Service {
     private static final String TAG = "StreamService";
-    private static final String CH_ID = "rovercam";
+    private static final String CH_ID = "roverhom";
     private static final int NOTIF_ID = 1;
 
     public static final String PREFS = "rover_prefs";
@@ -282,6 +282,8 @@ public class StreamService extends Service {
             }
         } else if (!active && wasActive) {
             stopCamera(id);
+            config.save(this);              // ← ДОБАВЛЕНО: не даём syncCameras перезапустить
+            Log.i(TAG, "updateCameraConfig: camera " + id + " stopped, config saved");
         } else if (active && wasActive) {
             if (resChanged) broadcaster.endStream(id);
             activeCameras.get(id).updateSettings(w, h, rot, fps, gray);
@@ -339,7 +341,7 @@ public class StreamService extends Service {
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel ch = new NotificationChannel(CH_ID, "RoverCam",
+            NotificationChannel ch = new NotificationChannel(CH_ID, "RoverHom",
                     NotificationManager.IMPORTANCE_LOW);
             getSystemService(NotificationManager.class)
                     .createNotificationChannel(ch);
@@ -348,7 +350,7 @@ public class StreamService extends Service {
 
     private Notification buildNotif(String text) {
         return new NotificationCompat.Builder(this, CH_ID)
-                .setContentTitle("RoverCam")
+                .setContentTitle("RoverHom")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_menu_camera)
                 .setOngoing(true)

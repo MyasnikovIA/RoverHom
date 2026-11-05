@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>RoverCam Multi-Stream</title>
+    <title>RoverHom Multi-Stream</title>
     <style>
         body { background: #101418; color: #eee; font-family: sans-serif; padding: 20px; margin: 0; }
         .container { max-width: 1400px; margin: 0 auto; }
@@ -28,15 +28,36 @@
         .cam-buttons { display: flex; gap: 10px; margin-left: auto; }
         .btn-start { background: #285; padding: 6px 12px; font-size: 12px; }
         .btn-stop { background: #833; padding: 6px 12px; font-size: 12px; }
-        .btn-exclusive { background: #553; padding: 6px 12px; font-size: 12px; }
-        .btn-exclusive:hover { background: #775; }
 
         .cam-view { background: #000; aspect-ratio: 4/3; position: relative; }
         .cam-view img { width: 100%; height: 100%; object-fit: contain; display: none; }
         .cam-view .offline-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #555; font-size: 16px; text-align: center; width: 90%; }
+
+        .banner {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #833;
+            color: #fff;
+            padding: 14px 24px;
+            border-radius: 8px;
+            z-index: 9999;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            font-size: 14px;
+            max-width: 80%;
+            text-align: center;
+            line-height: 1.4;
+        }
+        .banner.show { display: block; }
+        .banner.info { background: #285; }
+        .banner.warn { background: #985; }
     </style>
 </head>
 <body>
+<div id="banner" class="banner"></div>
+
 <div class="container">
     <div class="top-panel">
         <div class="settings-group">
@@ -54,52 +75,102 @@
     let camerasConfig = [];
     let lastHash = "";
 
-    async function load() {
-        try {
-            let res = await fetch('/api/cameras');
-            if (!res.ok) return;
-            let cfg = await res.json();
-            document.getElementById('port').value = cfg.port;
+    function showBanner(text, kind) {
+        const el = document.getElementById('banner');
+        el.textContent = text;
+        el.className = 'banner show' + (kind ? ' ' + kind : '');
+        clearTimeout(el._timer);
+        el._timer = setTimeout(() => { el.className = 'banner'; }, 6000);
+    }
 
-            let hash = cfg.cameras.map(c => c.id + "_" + c.active).join(",");
-            if (hash !== lastHash) {
-                lastHash = hash;
-                camerasConfig = cfg.cameras || [];
-                renderCameras();
-            }
-        } catch (e) {
-            console.error("Ошибка загрузки", e);
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    async function fetchCameras() {
+        try {
+            let res = await fetch('/api/cameras', { cache: 'no-store' });
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (e) { return null; }
+    }
+
+    async function load() {
+        let cfg = await fetchCameras();
+        if (!cfg) return;
+        document.getElementById('port').value = cfg.port;
+
+        let hash = (cfg.cameras || []).map(c => c.id + "_" + c.active).join(",");
+        if (hash !== lastHash) {
+            lastHash = hash;
+            camerasConfig = cfg.cameras || [];
+            renderCameras();
         }
     }
 
+    /**
+     * Обновляет сетку: удаляет пропавшие карточки, создаёт новые,
+     * ОБНОВЛЯЕТ существующие (это было пропущено).
+     */
     function renderCameras() {
         let grid = document.getElementById('grid');
-        let existingIds = new Set(Array.from(grid.children).map(el => el.dataset.id));
-        let newIds = new Set(camerasConfig.map(c => String(c.id)));
+        let existing = Array.from(grid.children);
 
-        existingIds.forEach(id => {
-            if (!newIds.has(id)) {
-                let el = grid.querySelector(`[data-id="${id}"]`);
-                if (el) grid.removeChild(el);
+        // Удаляем карточки, которых больше нет в конфиге
+        existing.forEach(el => {
+            if (!camerasConfig.find(c => String(c.id) === el.dataset.id)) {
+                grid.removeChild(el);
             }
         });
 
-        camerasConfig.forEach((cam) => {
-            if (!existingIds.has(String(cam.id))) {
-                let card = createCameraCard(cam);
-                card.dataset.id = cam.id;
-                grid.appendChild(card);
+        // Создаём или обновляем карточки
+        camerasConfig.forEach(cam => {
+            let el = grid.querySelector(`.cam-card[data-id="${cam.id}"]`);
+            if (!el) {
+                el = createCameraCard(cam);
+                el.dataset.id = cam.id;
+                grid.appendChild(el);
+            } else {
+                updateCameraCard(el, cam); // ← ГЛАВНОЕ ИСПРАВЛЕНИЕ
             }
         });
     }
 
-    async function postConfig(camId, isActive, extra = {}) {
+    /**
+     * Обновляет состояние существующей карточки без пересоздания DOM.
+     * Вызывается из renderCameras, когда камера уже есть на странице.
+     */
+    function updateCameraCard(card, cam) {
+        let btnStart = card.querySelector('.btn-start');
+        let btnStop = card.querySelector('.btn-stop');
+        let img = card.querySelector('img');
+        let offline = card.querySelector('.offline-text');
+
+        btnStart.disabled = cam.active;
+        btnStop.disabled = !cam.active;
+
+        if (cam.active) {
+            offline.style.display = 'none';
+            img.style.display = 'block';
+            // Запускаем поток ТОЛЬКО если он ещё не запущен
+            if (!img.src || img.src === '' || img.src.endsWith('/')) {
+                img.src = '/Cam' + cam.id + '.mjpg?' + Date.now();
+            }
+        } else {
+            img.style.display = 'none';
+            offline.style.display = 'block';
+            offline.textContent = 'Трансляция выключена';
+            img.src = '';
+        }
+    }
+
+    async function postConfig(camId, isActive, extra) {
+        extra = extra || {};
         let res = await fetch('/api/config', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
+            cache: 'no-store',
             body: JSON.stringify({
                 port: parseInt(document.getElementById('port').value),
-                cameras: [Object.assign({
+                cameras: [{
                     id: camId,
                     width: extra.width || 160,
                     height: extra.height || 120,
@@ -107,10 +178,111 @@
                     fps: extra.fps || 5,
                     grayscale: extra.grayscale || false,
                     active: isActive
-                })]
+                }]
             })
         });
         return res.json();
+    }
+
+    async function waitForCamerasToStop(excludeId, maxWaitMs) {
+        const start = Date.now();
+        while (Date.now() - start < maxWaitMs) {
+            const cfg = await fetchCameras();
+            if (cfg) {
+                const stillActive = (cfg.cameras || []).filter(
+                    c => c.id !== excludeId && c.active);
+                if (stillActive.length === 0) return true;
+            }
+            await sleep(300);
+        }
+        return false;
+    }
+
+    async function tryStartCamera(cam, params) {
+        // Попытка 1: обычный старт
+        let json;
+        try {
+            json = await postConfig(cam.id, true, params);
+        } catch (e) {
+            showBanner('Ошибка сети при запуске камеры ' + cam.id + ': ' + e.message);
+            return false;
+        }
+        if (json && json.ok) {
+            lastHash = "";
+            await load();
+            return true;
+        }
+
+        // Попытка 2: эксклюзивный запуск
+        let freshCfg = await fetchCameras();
+        if (!freshCfg) freshCfg = { cameras: camerasConfig };
+
+        let stoppedOthers = [];
+        for (let other of freshCfg.cameras) {
+            if (other.id !== cam.id && other.active) {
+                try {
+                    await postConfig(other.id, false, {
+                        width: other.width, height: other.height,
+                        rotation: other.rotation, fps: other.fps,
+                        grayscale: other.grayscale
+                    });
+                    stoppedOthers.push(other.id);
+                    console.log('Stopped camera ' + other.id);
+                } catch (e) {
+                    console.error('Не удалось остановить камеру ' + other.id, e);
+                }
+            }
+        }
+
+        if (stoppedOthers.length === 0) {
+            showBanner('Не удалось запустить камеру ' + cam.id
+                + '. Проверьте питание USB или закройте камеру в другом приложении.');
+            lastHash = "";
+            await load();
+            return false;
+        }
+
+        // Ждём, пока сервер подтвердит остановку
+        const allStopped = await waitForCamerasToStop(cam.id, 5000);
+        console.log('waitForCamerasToStop:', allStopped);
+
+        if (!allStopped) {
+            showBanner('Сервер не подтвердил остановку камеры ' + stoppedOthers.join(', ')
+                + '. Попробуйте ещё раз.');
+            lastHash = "";
+            await load();
+            return false;
+        }
+
+        // Даём Samsung HAL время отпустить камеру
+        await sleep(2000);
+
+        for (let retry = 1; retry <= 3; retry++) {
+            console.log('Exclusive start retry ' + retry + ' for camera ' + cam.id);
+            try {
+                let json2 = await postConfig(cam.id, true, params);
+                if (json2 && json2.ok) {
+                    showBanner(
+                        'Камера ' + cam.id + ' запущена. '
+                        + 'Одновременная работа двух камер не поддерживается — '
+                        + 'трансляция камеры ' + stoppedOthers.join(', ') + ' остановлена.',
+                        'info');
+                    lastHash = "";
+                    await load();
+                    return true;
+                }
+            } catch (e) {
+                console.error('Retry ' + retry + ' error:', e);
+            }
+            await sleep(1500);
+        }
+
+        showBanner('Не удалось запустить камеру ' + cam.id
+            + ' даже после остановки ' + stoppedOthers.join(', ')
+            + '. Снизьте разрешение или перезагрузите приложение.', 'warn');
+        lastHash = "";
+        await load();
+        return false;
     }
 
     function createCameraCard(cam) {
@@ -119,7 +291,7 @@
 
         let header = document.createElement('div');
         header.className = 'cam-header';
-        header.innerHTML = `<span class="cam-title">Camera ${cam.id}</span>`;
+        header.innerHTML = '<span class="cam-title">Camera ' + cam.id + '</span>';
 
         let btns = document.createElement('div');
         btns.className = 'cam-buttons';
@@ -134,15 +306,8 @@
         btnStop.textContent = '■ Стоп';
         btnStop.disabled = !cam.active;
 
-        // Кнопка "Только эта" - останавливает все остальные и запускает выбранную.
-        let btnExclusive = document.createElement('button');
-        btnExclusive.className = 'btn-exclusive';
-        btnExclusive.textContent = '⟲ Только эта';
-        btnExclusive.title = 'Остановить все камеры и запустить только эту';
-
         btns.appendChild(btnStart);
         btns.appendChild(btnStop);
-        btns.appendChild(btnExclusive);
         header.appendChild(btns);
         card.appendChild(header);
 
@@ -152,8 +317,7 @@
         let selRes = document.createElement('select');
         ['160x120','320x240','640x480','1280x720'].forEach(r => {
             let opt = document.createElement('option');
-            opt.value = r;
-            opt.textContent = r;
+            opt.value = r; opt.textContent = r;
             if (r === cam.width + 'x' + cam.height) opt.selected = true;
             selRes.appendChild(opt);
         });
@@ -161,8 +325,7 @@
         let selRot = document.createElement('select');
         [0, 90, 180, 270].forEach(r => {
             let opt = document.createElement('option');
-            opt.value = r;
-            opt.textContent = r + '°';
+            opt.value = r; opt.textContent = r + '°';
             if (r === cam.rotation) opt.selected = true;
             selRot.appendChild(opt);
         });
@@ -170,10 +333,8 @@
         let inpFps = document.createElement('input');
         inpFps.type = 'number';
         inpFps.value = cam.fps || 5;
-        inpFps.min = 1;
-        inpFps.max = 30;
+        inpFps.min = 1; inpFps.max = 30;
         inpFps.style.width = '60px';
-        inpFps.title = 'FPS';
 
         let lblGray = document.createElement('label');
         let chkGray = document.createElement('input');
@@ -219,25 +380,12 @@
             grayscale: chkGray.checked
         });
 
-        let showStartError = (msg) => {
-            alert('Не удалось запустить камеру.\n\n'
-                + (msg || 'Возможные причины:\n'
-                + '• Устройство не поддерживает одновременную работу нескольких камер\n'
-                + '• Не хватает питания USB\n'
-                + '• Превышено максимальное разрешение\n'
-                + '• Камера уже используется другим приложением'));
-        };
-
         btnStart.onclick = async () => {
+            btnStart.disabled = true;
             try {
-                let p = params();
-                let json = await postConfig(cam.id, true, p);
-                if (!json.ok) { showStartError(); }
-                lastHash = "";
-                load();
-            } catch (e) {
-                console.error(e);
-                showStartError(e.message);
+                await tryStartCamera(cam, params());
+            } finally {
+                await load();
             }
         };
 
@@ -245,62 +393,29 @@
             try {
                 await postConfig(cam.id, false, params());
                 lastHash = "";
-                load();
-            } catch (e) { console.error(e); }
-        };
-
-        btnExclusive.onclick = async () => {
-            try {
-                // Останавливаем все остальные камеры
-                for (let other of camerasConfig) {
-                    if (other.id !== cam.id && other.active) {
-                        await postConfig(other.id, false, {
-                            width: other.width, height: other.height,
-                            rotation: other.rotation, fps: other.fps,
-                            grayscale: other.grayscale
-                        });
-                    }
-                }
-                // Запускаем эту
-                let p = params();
-                let json = await postConfig(cam.id, true, p);
-                if (!json.ok) { showStartError(); }
-                lastHash = "";
-                load();
+                await load();
             } catch (e) {
-                console.error(e);
-                showStartError(e.message);
+                showBanner('Ошибка: ' + e.message);
             }
         };
 
-        selRes.onchange = async () => {
-            let p = params();
-            let json = await postConfig(cam.id, cam.active, p);
-            if (!json.ok && cam.active) showStartError();
-            lastHash = "";
-            load();
+        let onChangeHandler = async () => {
+            try {
+                let json = await postConfig(cam.id, cam.active, params());
+                if (!json.ok && cam.active) {
+                    showBanner('Не удалось применить настройки к камере ' + cam.id + '.');
+                }
+                lastHash = "";
+                await load();
+            } catch (e) {
+                showBanner('Ошибка: ' + e.message);
+            }
         };
-        selRot.onchange = async () => {
-            let p = params();
-            let json = await postConfig(cam.id, cam.active, p);
-            if (!json.ok && cam.active) showStartError();
-            lastHash = "";
-            load();
-        };
-        inpFps.onchange = async () => {
-            let p = params();
-            let json = await postConfig(cam.id, cam.active, p);
-            if (!json.ok && cam.active) showStartError();
-            lastHash = "";
-            load();
-        };
-        chkGray.onchange = async () => {
-            let p = params();
-            let json = await postConfig(cam.id, cam.active, p);
-            if (!json.ok && cam.active) showStartError();
-            lastHash = "";
-            load();
-        };
+
+        selRes.onchange = onChangeHandler;
+        selRot.onchange = onChangeHandler;
+        inpFps.onchange = onChangeHandler;
+        chkGray.onchange = onChangeHandler;
 
         return card;
     }
