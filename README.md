@@ -190,10 +190,10 @@ IP-адрес устройства в локальной сети показыв
 └─────┬──────────────────────────────────────────────┬───────┘
       │                                              │
       ▼                                              ▼
-┌───────────────┐                          ┌──────────────────┐
-│ CameraController │  NV21 → JPEG           │ MJPEGServer       │
-│  - Camera1 API   │  ────────────────────► │  - HttpServer     │
-│  - SurfaceTexture│                        │  - Executor       │
+┌──────────────────┐                        ┌──────────────────┐
+│ CameraController │  NV21 → JPEG           │ MJPEGServer      │
+│  - Camera1 API   │  ────────────────────► │  - HttpServer    │
+│  - SurfaceTexture│                        │  - Executor      │
 │  - HandlerThread │                        │                  │
 └───────────────┬──┘                        └──────┬───────────┘
                 │                                  │
