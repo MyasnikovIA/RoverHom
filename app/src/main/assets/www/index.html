@@ -28,6 +28,8 @@
         .cam-buttons { display: flex; gap: 10px; margin-left: auto; }
         .btn-start { background: #285; padding: 6px 12px; font-size: 12px; }
         .btn-stop { background: #833; padding: 6px 12px; font-size: 12px; }
+        .btn-exclusive { background: #553; padding: 6px 12px; font-size: 12px; }
+        .btn-exclusive:hover { background: #775; }
 
         .cam-view { background: #000; aspect-ratio: 4/3; position: relative; }
         .cam-view img { width: 100%; height: 100%; object-fit: contain; display: none; }
@@ -59,7 +61,6 @@
             let cfg = await res.json();
             document.getElementById('port').value = cfg.port;
 
-            // Проверяем, изменилось ли количество камер или их статус
             let hash = cfg.cameras.map(c => c.id + "_" + c.active).join(",");
             if (hash !== lastHash) {
                 lastHash = hash;
@@ -73,12 +74,9 @@
 
     function renderCameras() {
         let grid = document.getElementById('grid');
-
-        // Сохраняем существующие элементы, чтобы не перезагружать потоки без надобности
         let existingIds = new Set(Array.from(grid.children).map(el => el.dataset.id));
         let newIds = new Set(camerasConfig.map(c => String(c.id)));
 
-        // Удаляем отключенные камеры
         existingIds.forEach(id => {
             if (!newIds.has(id)) {
                 let el = grid.querySelector(`[data-id="${id}"]`);
@@ -86,7 +84,6 @@
             }
         });
 
-        // Добавляем новые камеры
         camerasConfig.forEach((cam) => {
             if (!existingIds.has(String(cam.id))) {
                 let card = createCameraCard(cam);
@@ -94,6 +91,26 @@
                 grid.appendChild(card);
             }
         });
+    }
+
+    async function postConfig(camId, isActive, extra = {}) {
+        let res = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                port: parseInt(document.getElementById('port').value),
+                cameras: [Object.assign({
+                    id: camId,
+                    width: extra.width || 160,
+                    height: extra.height || 120,
+                    rotation: extra.rotation || 0,
+                    fps: extra.fps || 5,
+                    grayscale: extra.grayscale || false,
+                    active: isActive
+                })]
+            })
+        });
+        return res.json();
     }
 
     function createCameraCard(cam) {
@@ -117,8 +134,15 @@
         btnStop.textContent = '■ Стоп';
         btnStop.disabled = !cam.active;
 
+        // Кнопка "Только эта" - останавливает все остальные и запускает выбранную.
+        let btnExclusive = document.createElement('button');
+        btnExclusive.className = 'btn-exclusive';
+        btnExclusive.textContent = '⟲ Только эта';
+        btnExclusive.title = 'Остановить все камеры и запустить только эту';
+
         btns.appendChild(btnStart);
         btns.appendChild(btnStop);
+        btns.appendChild(btnExclusive);
         header.appendChild(btns);
         card.appendChild(header);
 
@@ -187,53 +211,101 @@
         view.appendChild(img);
         card.appendChild(view);
 
-        let updateConfig = async (isActive) => {
+        let params = () => ({
+            width: parseInt(selRes.value.split('x')[0]),
+            height: parseInt(selRes.value.split('x')[1]),
+            rotation: parseInt(selRot.value),
+            fps: parseInt(inpFps.value),
+            grayscale: chkGray.checked
+        });
+
+        let showStartError = (msg) => {
+            alert('Не удалось запустить камеру.\n\n'
+                + (msg || 'Возможные причины:\n'
+                + '• Устройство не поддерживает одновременную работу нескольких камер\n'
+                + '• Не хватает питания USB\n'
+                + '• Превышено максимальное разрешение\n'
+                + '• Камера уже используется другим приложением'));
+        };
+
+        btnStart.onclick = async () => {
             try {
-                let res = await fetch('/api/config', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        port: parseInt(document.getElementById('port').value),
-                        cameras: [{
-                            id: cam.id,
-                            width: parseInt(selRes.value.split('x')[0]),
-                            height: parseInt(selRes.value.split('x')[1]),
-                            rotation: parseInt(selRot.value),
-                            fps: parseInt(inpFps.value),
-                            grayscale: chkGray.checked,
-                            active: isActive
-                        }]
-                    })
-                });
-
-                if (!res.ok) throw new Error("HTTP " + res.status);
-
-                if (isActive !== cam.active) {
-                    lastHash = ""; // Принудительная перерисовка
-                    load();
-                } else if (isActive) {
-                    img.src = "";
-                    setTimeout(() => { img.src = '/Cam' + cam.id + '.mjpg?' + Date.now(); }, 800);
-                }
+                let p = params();
+                let json = await postConfig(cam.id, true, p);
+                if (!json.ok) { showStartError(); }
+                lastHash = "";
+                load();
             } catch (e) {
-                console.error("Ошибка", e);
-                if (isActive) alert("Не удалось запустить камеру. Возможно, шина перегружена.");
+                console.error(e);
+                showStartError(e.message);
             }
         };
 
-        btnStart.onclick = () => updateConfig(true);
-        btnStop.onclick = () => updateConfig(false);
+        btnStop.onclick = async () => {
+            try {
+                await postConfig(cam.id, false, params());
+                lastHash = "";
+                load();
+            } catch (e) { console.error(e); }
+        };
 
-        selRes.onchange = () => updateConfig(cam.active);
-        selRot.onchange = () => updateConfig(cam.active);
-        inpFps.onchange = () => updateConfig(cam.active);
-        chkGray.onchange = () => updateConfig(cam.active);
+        btnExclusive.onclick = async () => {
+            try {
+                // Останавливаем все остальные камеры
+                for (let other of camerasConfig) {
+                    if (other.id !== cam.id && other.active) {
+                        await postConfig(other.id, false, {
+                            width: other.width, height: other.height,
+                            rotation: other.rotation, fps: other.fps,
+                            grayscale: other.grayscale
+                        });
+                    }
+                }
+                // Запускаем эту
+                let p = params();
+                let json = await postConfig(cam.id, true, p);
+                if (!json.ok) { showStartError(); }
+                lastHash = "";
+                load();
+            } catch (e) {
+                console.error(e);
+                showStartError(e.message);
+            }
+        };
+
+        selRes.onchange = async () => {
+            let p = params();
+            let json = await postConfig(cam.id, cam.active, p);
+            if (!json.ok && cam.active) showStartError();
+            lastHash = "";
+            load();
+        };
+        selRot.onchange = async () => {
+            let p = params();
+            let json = await postConfig(cam.id, cam.active, p);
+            if (!json.ok && cam.active) showStartError();
+            lastHash = "";
+            load();
+        };
+        inpFps.onchange = async () => {
+            let p = params();
+            let json = await postConfig(cam.id, cam.active, p);
+            if (!json.ok && cam.active) showStartError();
+            lastHash = "";
+            load();
+        };
+        chkGray.onchange = async () => {
+            let p = params();
+            let json = await postConfig(cam.id, cam.active, p);
+            if (!json.ok && cam.active) showStartError();
+            lastHash = "";
+            load();
+        };
 
         return card;
     }
 
     load();
-    // Автоматическое обновление списка камер каждые 2 секунды
     setInterval(load, 2000);
 </script>
 </body>

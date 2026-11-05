@@ -1,4 +1,4 @@
-package ru.miacomsoft.roverhom.processing;
+package ru.miacomsoft.roverhom;
 
 public interface FrameProcessor {
     /**

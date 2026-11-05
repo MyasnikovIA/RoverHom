@@ -2,18 +2,20 @@ package ru.miacomsoft.roverhom;
 
 import android.content.Context;
 import android.util.Log;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
 public class AppConfig {
-    public int port = 8080;
+    public int port = 8081;
     public List<CameraConfig> cameras = new ArrayList<>();
 
     public static class CameraConfig {

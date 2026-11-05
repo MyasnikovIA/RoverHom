@@ -2,7 +2,9 @@ package ru.miacomsoft.roverhom.handlers;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+
 import java.io.OutputStream;
+
 import ru.miacomsoft.roverhom.FrameBroadcaster;
 
 public class ApiSnapshotHandler implements HttpHandler {

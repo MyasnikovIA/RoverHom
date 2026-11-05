@@ -2,11 +2,14 @@ package ru.miacomsoft.roverhom.handlers;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
+
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+
 import ru.miacomsoft.roverhom.AppConfig;
 import ru.miacomsoft.roverhom.StreamService;
 
@@ -41,6 +44,7 @@ public class ApiConfigHandler implements HttpHandler {
             InputStream is = ex.getRequestBody();
             byte[] buf = new byte[8192];
             int n = is.read(buf);
+            boolean allOk = true;
             if (n > 0) {
                 JSONObject req = new JSONObject(new String(buf, 0, n, StandardCharsets.UTF_8));
                 int port = req.optInt("port", cfg.port);
@@ -50,7 +54,7 @@ public class ApiConfigHandler implements HttpHandler {
                 if (arr != null) {
                     for (int i = 0; i < arr.length(); i++) {
                         JSONObject jc = arr.getJSONObject(i);
-                        svc.updateCameraConfig(
+                        boolean ok = svc.updateCameraConfig(
                                 jc.getInt("id"),
                                 jc.optInt("width", 320),
                                 jc.optInt("height", 240),
@@ -59,11 +63,12 @@ public class ApiConfigHandler implements HttpHandler {
                                 jc.optBoolean("grayscale", false),
                                 jc.optBoolean("active", false)
                         );
+                        if (!ok) allOk = false;
                     }
                 }
                 cfg.save(svc);
             }
-            sendJson(ex, "{\"ok\":true}");
+            sendJson(ex, "{\"ok\":" + allOk + "}");
         }
     }
 
