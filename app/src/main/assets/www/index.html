@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>RoverCam Multi-Stream</title>
+    <style>
+        body { background: #101418; color: #eee; font-family: sans-serif; padding: 20px; margin: 0; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .top-panel { background: #182028; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;}
+        .settings-group { display: flex; gap: 20px; align-items: flex-end; }
+        .form-group { display: flex; flex-direction: column; }
+        label { font-size: 12px; color: #8aa; margin-bottom: 4px; }
+        input { padding: 8px; background: #0e1418; color: #fff; border: 1px solid #234; border-radius: 4px; width: 100px;}
+        button { background: #248; color: #fff; padding: 9px 20px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #369; }
+        button:disabled { background: #333; cursor: not-allowed; }
+
+        .streams-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; }
+        .cam-card { background: #182028; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+        .cam-header { padding: 10px; display: flex; justify-content: space-between; align-items: center; background: #0e1418; border-bottom: 1px solid #234; }
+        .cam-title { color: #6cf; font-weight: bold; font-size: 14px; }
+
+        .cam-settings { padding: 10px; display: flex; gap: 10px; flex-wrap: wrap; background: #1a222a; align-items: center; }
+        .cam-settings select, .cam-settings input[type=number] { padding: 6px; background: #0e1418; color: #fff; border: 1px solid #234; border-radius: 4px; }
+        .cam-settings label { display: flex; align-items: center; gap: 4px; margin: 0; cursor: pointer; }
+
+        .cam-buttons { display: flex; gap: 10px; margin-left: auto; }
+        .btn-start { background: #285; padding: 6px 12px; font-size: 12px; }
+        .btn-stop { background: #833; padding: 6px 12px; font-size: 12px; }
+
+        .cam-view { background: #000; aspect-ratio: 4/3; position: relative; }
+        .cam-view img { width: 100%; height: 100%; object-fit: contain; display: none; }
+        .cam-view .offline-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #555; font-size: 16px; text-align: center; width: 90%; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="top-panel">
+        <div class="settings-group">
+            <div class="form-group">
+                <label>Порт (требует перезагрузки):</label>
+                <input type="number" id="port" value="8080">
+            </div>
+        </div>
+    </div>
+
+    <div class="streams-grid" id="grid"></div>
+</div>
+
+<script>
+    let camerasConfig = [];
+    let lastHash = "";
+
+    async function load() {
+        try {
+            let res = await fetch('/api/cameras');
+            if (!res.ok) return;
+            let cfg = await res.json();
+            document.getElementById('port').value = cfg.port;
+
+            // Проверяем, изменилось ли количество камер или их статус
+            let hash = cfg.cameras.map(c => c.id + "_" + c.active).join(",");
+            if (hash !== lastHash) {
+                lastHash = hash;
+                camerasConfig = cfg.cameras || [];
+                renderCameras();
+            }
+        } catch (e) {
+            console.error("Ошибка загрузки", e);
+        }
+    }
+
+    function renderCameras() {
+        let grid = document.getElementById('grid');
+
+        // Сохраняем существующие элементы, чтобы не перезагружать потоки без надобности
+        let existingIds = new Set(Array.from(grid.children).map(el => el.dataset.id));
+        let newIds = new Set(camerasConfig.map(c => String(c.id)));
+
+        // Удаляем отключенные камеры
+        existingIds.forEach(id => {
+            if (!newIds.has(id)) {
+                let el = grid.querySelector(`[data-id="${id}"]`);
+                if (el) grid.removeChild(el);
+            }
+        });
+
+        // Добавляем новые камеры
+        camerasConfig.forEach((cam) => {
+            if (!existingIds.has(String(cam.id))) {
+                let card = createCameraCard(cam);
+                card.dataset.id = cam.id;
+                grid.appendChild(card);
+            }
+        });
+    }
+
+    function createCameraCard(cam) {
+        let card = document.createElement('div');
+        card.className = 'cam-card';
+
+        let header = document.createElement('div');
+        header.className = 'cam-header';
+        header.innerHTML = `<span class="cam-title">Camera ${cam.id}</span>`;
+
+        let btns = document.createElement('div');
+        btns.className = 'cam-buttons';
+
+        let btnStart = document.createElement('button');
+        btnStart.className = 'btn-start';
+        btnStart.textContent = '▶ Старт';
+        btnStart.disabled = cam.active;
+
+        let btnStop = document.createElement('button');
+        btnStop.className = 'btn-stop';
+        btnStop.textContent = '■ Стоп';
+        btnStop.disabled = !cam.active;
+
+        btns.appendChild(btnStart);
+        btns.appendChild(btnStop);
+        header.appendChild(btns);
+        card.appendChild(header);
+
+        let settings = document.createElement('div');
+        settings.className = 'cam-settings';
+
+        let selRes = document.createElement('select');
+        ['160x120','320x240','640x480','1280x720'].forEach(r => {
+            let opt = document.createElement('option');
+            opt.value = r;
+            opt.textContent = r;
+            if (r === cam.width + 'x' + cam.height) opt.selected = true;
+            selRes.appendChild(opt);
+        });
+
+        let selRot = document.createElement('select');
+        [0, 90, 180, 270].forEach(r => {
+            let opt = document.createElement('option');
+            opt.value = r;
+            opt.textContent = r + '°';
+            if (r === cam.rotation) opt.selected = true;
+            selRot.appendChild(opt);
+        });
+
+        let inpFps = document.createElement('input');
+        inpFps.type = 'number';
+        inpFps.value = cam.fps || 5;
+        inpFps.min = 1;
+        inpFps.max = 30;
+        inpFps.style.width = '60px';
+        inpFps.title = 'FPS';
+
+        let lblGray = document.createElement('label');
+        let chkGray = document.createElement('input');
+        chkGray.type = 'checkbox';
+        chkGray.checked = cam.grayscale;
+        lblGray.appendChild(chkGray);
+        lblGray.appendChild(document.createTextNode('Ч/Б'));
+
+        settings.appendChild(selRes);
+        settings.appendChild(selRot);
+        settings.appendChild(inpFps);
+        settings.appendChild(lblGray);
+        card.appendChild(settings);
+
+        let view = document.createElement('div');
+        view.className = 'cam-view';
+
+        let offline = document.createElement('div');
+        offline.className = 'offline-text';
+        offline.innerHTML = cam.active ? 'Ожидание потока...' : 'Трансляция выключена';
+
+        let img = document.createElement('img');
+        if (cam.active) {
+            img.style.display = 'block';
+            offline.style.display = 'none';
+            setTimeout(() => { img.src = '/Cam' + cam.id + '.mjpg?' + Date.now(); }, 500);
+            img.onerror = () => {
+                img.style.display = 'none';
+                offline.style.display = 'block';
+                offline.textContent = 'Нет видеопотока';
+            };
+        }
+
+        view.appendChild(offline);
+        view.appendChild(img);
+        card.appendChild(view);
+
+        let updateConfig = async (isActive) => {
+            try {
+                let res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        port: parseInt(document.getElementById('port').value),
+                        cameras: [{
+                            id: cam.id,
+                            width: parseInt(selRes.value.split('x')[0]),
+                            height: parseInt(selRes.value.split('x')[1]),
+                            rotation: parseInt(selRot.value),
+                            fps: parseInt(inpFps.value),
+                            grayscale: chkGray.checked,
+                            active: isActive
+                        }]
+                    })
+                });
+
+                if (!res.ok) throw new Error("HTTP " + res.status);
+
+                if (isActive !== cam.active) {
+                    lastHash = ""; // Принудительная перерисовка
+                    load();
+                } else if (isActive) {
+                    img.src = "";
+                    setTimeout(() => { img.src = '/Cam' + cam.id + '.mjpg?' + Date.now(); }, 800);
+                }
+            } catch (e) {
+                console.error("Ошибка", e);
+                if (isActive) alert("Не удалось запустить камеру. Возможно, шина перегружена.");
+            }
+        };
+
+        btnStart.onclick = () => updateConfig(true);
+        btnStop.onclick = () => updateConfig(false);
+
+        selRes.onchange = () => updateConfig(cam.active);
+        selRot.onchange = () => updateConfig(cam.active);
+        inpFps.onchange = () => updateConfig(cam.active);
+        chkGray.onchange = () => updateConfig(cam.active);
+
+        return card;
+    }
+
+    load();
+    // Автоматическое обновление списка камер каждые 2 секунды
+    setInterval(load, 2000);
+</script>
+</body>
+</html>
